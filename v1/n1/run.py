@@ -8,7 +8,9 @@ import matplotlib
 matplotlib.use('Agg')
 from IPython.display import clear_output
 import os
+import tqdm
 
+print("✓ Initialisation...")
 network = Level1Network()
 
 env = create('humanoid')               # ou 'ant','humanoid',...
@@ -56,18 +58,25 @@ def compute_reward(state):
 
 
 
-
+@jax.jit
 def rollout_fitness(params, rng, env, network, steps=200):
     state = env.reset(rng)
     total_reward = 0.0
+    carry = (state, total_reward)
     
-    for step in range(steps):
+    def loop(index, carry):
+        state, total_reward = carry
         instruction = jnp.ones(4)
         proprio = state.obs
         
         action = network.apply(params, instruction, proprio)
+        
         state = env.step(state, action)
         total_reward += compute_reward(state)
+        return (state, total_reward)
+    
+    carry = jax.lax.fori_loop(0, steps, loop, carry)
+    final_state, total_reward = carry
     return total_reward
 
 def init_pop(base_params, pop_size, rng, sigma=0.1):
@@ -145,9 +154,11 @@ def run_best_model(best_params, env, network, rng, steps=300, name="best_model",
     rewards = []
     states = []
 
-    for step in range(steps):
-        instruction = jnp.ones(4)
+    @jax.jit
+    def scan_step(carry, x):
+        state = carry
         proprio = state.obs
+        instruction = jnp.ones(4)
 
         action = network.apply(best_params, instruction, proprio)
         state = env.step(state, action)
@@ -156,16 +167,15 @@ def run_best_model(best_params, env, network, rng, steps=300, name="best_model",
         torso_pos = state.pipeline_state.x.pos[0]     # (x, y, z)
         torso_rot = state.pipeline_state.x.rot[0]     # quaternion (w, x, y, z)
 
-        height = float(torso_pos[2])
-        tilt = float(jnp.sum(torso_rot[1:3] ** 2))
-        reward = float(compute_reward(state))
+        height = torso_pos[2]
+        tilt = jnp.sum(torso_rot[1:3] ** 2)
+        reward = compute_reward(state)
 
-        torso_heights.append(height)
-        tilt_values.append(tilt)
-        rewards.append(reward)
+        return state, (state.pipeline_state, height, tilt, reward)
+        
+    _, results = jax.lax.scan(scan_step, state, jnp.arange(steps))
 
-        states.append(state.pipeline_state)
-
+    states, torso_heights, tilt_values, rewards = results
     # --- plots ---
     plt.figure(figsize=(12,4))
 
@@ -200,11 +210,12 @@ def run_best_model(best_params, env, network, rng, steps=300, name="best_model",
         f.write(html_str)
     print("✓ Visualisation générée :")
 
+print("✓ Entraînement...")
 vmap_fitness = jax.vmap(rollout_fitness, in_axes=(0, 0, None, None))
 pop = init_pop(params, pop_size, rng)
 
 num_generations = 100
-for step in range(num_generations):
+for step in tqdm.tqdm(range(num_generations), desc="step", total=num_generations):
     rng, step_rng = jax.random.split(rng)
     rngs = jax.random.split(step_rng, pop_size)
     fitness = vmap_fitness(pop, rngs, env, network)
@@ -218,7 +229,7 @@ for step in range(num_generations):
     
     # Logging simple
     if step % 10 == 0 or step == num_generations - 1:
-        print(f"Gen {step:3d}/{num_generations} | "
+        tqdm.tqdm.write(f"Gen {step:3d}/{num_generations} | "
               f"Best: {stats[-1]['k_best']:.2f} | "
               f"Avg: {stats[-1]['average']:.2f} | "
               f"Top-{k}: {stats[-1]['k_best_average']:.2f}")

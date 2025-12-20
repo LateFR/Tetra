@@ -1,2 +1,6 @@
 brax
 matplotlib
+pillow
+ipython
+tqdm
+jax[cuda12]
