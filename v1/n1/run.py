@@ -234,11 +234,10 @@ for step in tqdm.tqdm(range(num_generations), desc="step", total=num_generations
               f"Avg: {stats[-1]['average']:.2f} | "
               f"Top-{k}: {stats[-1]['k_best_average']:.2f}")
     
-    best_idx = jnp.argmax(stats[-1]["fitness"])
-    best_params = jax.tree_util.tree_map(lambda x: x[best_idx], pop)
-    run_best_model(best_params, env, network, rng, steps=300, name=f"model_{step}", path=f"./models/v1/{step}")
-    # Affichage graphique
     if step % 20 == 0 or step == num_generations - 1:
+        best_idx = jnp.argmax(stats[-1]["fitness"])
+        best_params = jax.tree_util.tree_map(lambda x: x[best_idx], pop)
+        run_best_model(best_params, env, network, rng, steps=300, name=f"model_{step}", path=f"./models/v1/{step}")
         plot_stats(stats)
     
     elites = select(pop, fitness_norm, k)
