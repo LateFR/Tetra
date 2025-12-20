@@ -1,0 +1,57 @@
+from flax import linen as nn
+from jax import numpy as jnp
+
+class Level1Network(nn.Module):
+    """
+    Réseau N1 : Contrôleur bas niveau avec double flux
+    
+    Inputs:
+        - instruction_N2 : vecteur d'instruction (pour l'instant on met des zéros)
+        - proprio : proprioception (vitesse du chariot, position absolue)
+    
+    Output:
+        - action : force à appliquer (entre -1 et 1)
+    """
+    
+    instruction_dim: int = 4   # taille du vecteur d'instruction
+    hidden_dim: int = 8        # neurones cachés (petit réseau)
+    
+    @nn.compact
+    def __call__(self, instruction_N2, proprio):
+        """
+        Forward pass du réseau
+        
+        Args:
+            instruction_N2 : jnp.array de taille [instruction_dim]
+            proprio : jnp.array de taille 2 (position + vitesse)
+        
+        Returns:
+            action : float (force entre -1 et 1)
+        """
+        
+        # === FLUX COMMANDÉ : Interprète l'instruction de N2 ===
+        commanded = nn.Dense(features=self.hidden_dim, name='cmd_dense1')(instruction_N2)
+        commanded = nn.tanh(commanded)
+        commanded = nn.Dense(features=1, name='cmd_output')(commanded)
+        commanded = nn.tanh(commanded)  # action entre -1 et 1
+        
+        # === FLUX RÉFLEXE : Réagit à la proprioception ===
+        reflexive = nn.Dense(features=self.hidden_dim, name='ref_dense1')(proprio)
+        reflexive = nn.tanh(reflexive)
+        reflexive = nn.Dense(features=1, name='ref_output')(reflexive)
+        reflexive = nn.tanh(reflexive)
+        
+        # === ATTENTION : Quel flux privilégier ? ===
+        # Concatène instruction + proprio pour décider
+        attention_input = jnp.concatenate([instruction_N2, proprio])
+        attention = nn.Dense(features=4, name='att_dense1')(attention_input)
+        attention = nn.tanh(attention)
+        attention = nn.Dense(features=1, name='att_output')(attention)
+        attention = nn.sigmoid(attention)  # poids entre 0 et 1
+        
+        # === FUSION ===
+        # action finale = mélange pondéré des deux flux
+        final_action = attention * commanded + (1 - attention) * reflexive
+        
+        # Retourne un scalaire (pas un array de taille [1])
+        return final_action[0]
