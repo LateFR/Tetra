@@ -150,39 +150,45 @@ def plot_stats(stats):
     plt.savefig(f"./stats/stats-{step}.png")
     plt.close()
 
-def run_best_model(best_params, env, network, rng, steps=300, name="best_model", path="./models"):
-    
-    os.makedirs(path, exist_ok=True)
-    
-    state = env.reset(rng)
+def make_run_best_model(env, network, steps=200):
+    def run_best_model(best_params, rng):
+        state = env.reset(rng)
 
-    torso_heights = []
-    tilt_values = []
-    rewards = []
-    states = []
+        torso_heights = []
+        tilt_values = []
+        rewards = []
+        states = []
 
-    @jax.jit
-    def scan_step(carry, x):
-        state = carry
-        proprio = state.obs
-        instruction = jnp.ones(4)
+        def scan_step(carry, x):
+            state = carry
+            proprio = state.obs
+            instruction = jnp.ones(4)
 
-        action = network.apply(best_params, instruction, proprio)
-        state = env.step(state, action)
+            action = network.apply(best_params, instruction, proprio)
+            state = env.step(state, action)
 
-        # --- métriques physiques ---
-        torso_pos = state.pipeline_state.x.pos[0]     # (x, y, z)
-        torso_rot = state.pipeline_state.x.rot[0]     # quaternion (w, x, y, z)
+            # --- métriques physiques ---
+            torso_pos = state.pipeline_state.x.pos[0]     # (x, y, z)
+            torso_rot = state.pipeline_state.x.rot[0]     # quaternion (w, x, y, z)
 
-        height = torso_pos[2]
-        tilt = jnp.sum(torso_rot[1:3] ** 2)
-        reward = compute_reward(state)
+            height = torso_pos[2]
+            tilt = jnp.sum(torso_rot[1:3] ** 2)
+            reward = compute_reward(state)
 
-        return state, (state.pipeline_state, height, tilt, reward)
+            return state, (state.pipeline_state, height, tilt, reward)
+            
+        _, results = jax.lax.scan(scan_step, state, jnp.arange(steps))
+
+        states, torso_heights, tilt_values, rewards = results
         
-    _, results = jax.lax.scan(scan_step, state, jnp.arange(steps))
+        return states, torso_heights, tilt_values, rewards
+    
+    return jax.jit(run_best_model)
 
-    states, torso_heights, tilt_values, rewards = results
+run_best_model = make_run_best_model(env, network)
+
+def use_plots(states, torso_heights, tilt_values, rewards, name="best_model", path="./models"):
+    os.makedirs(path, exist_ok=True)
     # --- plots ---
     plt.figure(figsize=(12,4))
 
@@ -215,11 +221,12 @@ def run_best_model(best_params, env, network, rng, steps=300, name="best_model",
 
     with open(os.path.join(path, f"{name}.html"), "w") as f:
         f.write(html_str)
-    print("✓ Visualisation générée :")
+        
+    tqdm.tqdm.write("✓ Visualisation générée :")
 
 print("✓ Entraînement...")
 
-vmap_fitness = jax.vmap(rollout_fitness, in_axes=(0, 0, None, None))
+vmap_fitness = jax.vmap(rollout_fitness, in_axes=(0, 0))
 pop = init_pop(params, pop_size, rng)
 
 num_generations = 100
@@ -245,7 +252,8 @@ for step in tqdm.tqdm(range(num_generations), desc="step", total=num_generations
     if step % 20 == 0 or step == num_generations - 1:
         best_idx = jnp.argmax(stats[-1]["fitness"])
         best_params = jax.tree_util.tree_map(lambda x: x[best_idx], pop)
-        run_best_model(best_params, env, network, rng, steps=300, name=f"model_{step}", path=f"./models/v1/{step}")
+        states, torso_heights, tilt_values, rewards = run_best_model(best_params, rng)
+        use_plots(states, torso_heights, tilt_values, rewards, name=f"model_{step}", path=f"./models/v1/{step}")
         plot_stats(stats)
     
     elites = select(pop, fitness_norm, k)
