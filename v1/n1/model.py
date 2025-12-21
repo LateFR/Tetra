@@ -54,4 +54,4 @@ class Level1Network(nn.Module):
         final_action = attention * commanded + (1 - attention) * reflexive
         
         # Retourne un scalaire (pas un array de taille [1])
-        return final_action[0]
+        return final_action

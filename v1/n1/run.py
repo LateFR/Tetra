@@ -1,4 +1,3 @@
-# notebook_visualize.py  (fonctionne dans Jupyter / Colab)
 import jax, jax.numpy as jnp
 from model import Level1Network
 import matplotlib.pyplot as plt
@@ -250,11 +249,13 @@ for step in tqdm.tqdm(range(num_generations), desc="step", total=num_generations
               f"Top-{k}: {stats[-1]['k_best_average']:.2f}")
     
     if step % 20 == 0 or step == num_generations - 1:
+        tqdm.tqdm.write("Generating stats and plots...")
         best_idx = jnp.argmax(stats[-1]["fitness"])
         best_params = jax.tree_util.tree_map(lambda x: x[best_idx], pop)
         states, torso_heights, tilt_values, rewards = run_best_model(best_params, rng)
         use_plots(states, torso_heights, tilt_values, rewards, name=f"model_{step}", path=f"./models/v1/{step}")
         plot_stats(stats)
+        print("✓ Stats and plots generated.")
     
     elites = select(pop, fitness_norm, k)
     pop = reproduce(elites, pop_size, rng, k)
