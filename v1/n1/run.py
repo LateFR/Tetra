@@ -31,8 +31,10 @@ dummy_proprio = jnp.zeros(env.observation_size)
 params = network.init(init_rng, dummy_instruction, dummy_proprio)
 stats = []
 
-pop_size = 64
-K = 8
+pop_size = 128
+K = 16
+SIGMA_INIT = 0.3
+SIGMA_REPROD = 0.1
 
 def compute_reward(state):
     ps = state.pipeline_state
@@ -238,7 +240,7 @@ def use_plots(states, torso_heights, tilt_values, rewards, name="best_model", pa
 print("✓ Entraînement...")
 
 vmap_fitness = jax.vmap(rollout_fitness, in_axes=(0, 0))
-pop = init_pop(params, pop_size, rng)
+pop = init_pop(params, pop_size, rng, sigma=SIGMA_INIT)
 
 
 num_generations = 500
@@ -278,7 +280,7 @@ for step in tqdm.tqdm(range(num_generations), desc="step", total=num_generations
     
     pop = jax.device_put(pop)
     elites = jax.device_put(select(pop, fitness_norm))
-    pop = reproduce(elites, pop_size, rng)
+    pop = reproduce(elites, pop_size, rng, sigma=SIGMA_REPROD)
 
 print("\n✓ Entraînement terminé!")
 print("Best model:")
