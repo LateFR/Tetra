@@ -14,7 +14,7 @@ print("✓ Initialisation...")
 network = Level1Network()
 
 env = envs.get_environment(
-    env_name='ant',
+    env_name='humanoid',
     backend='mjx'  # ← Utilise MJX sous le capot
 )             # ou 'ant','humanoid',...
 
@@ -32,7 +32,7 @@ params = network.init(init_rng, dummy_instruction, dummy_proprio)
 stats = []
 
 pop_size = 64
-k = 8
+K = 8
 
 def compute_reward(state):
     ps = state.pipeline_state
@@ -96,31 +96,34 @@ def init_pop(base_params, pop_size, rng, sigma=0.1):
         return jax.tree_util.tree_map(lambda p, n: p + n, base_params, noise)
     return jax.vmap(mutate)(rngs)
 
-def select(pop, fitness, k):
-    top_k = jnp.argsort(fitness)[-k:][::-1]
-    elites = jax.tree_util.tree_map(lambda x: x[top_k], pop)
+@jax.jit
+def select(pop, fitness):
+    values, top_idx = jax.lax.top_k(fitness, K)  # values is the value of the fitness, top_idx is the index (in pop) of the top K 
+    elites = jax.tree_util.tree_map(lambda x: jnp.take(x, top_idx, axis=0), pop)
     return elites
     
-def generate_stats(fitness, k):
+def generate_stats(fitness):
     return {
         "fitness": fitness,
         "average": jnp.mean(fitness),
         "k_best": jnp.max(fitness),
         "k_worst": jnp.min(fitness),
         "k_average": jnp.mean(fitness),
-        "k_bests": jnp.sort(fitness)[-k:],
-        "k_best_average": jnp.mean(jnp.sort(fitness)[-k:])
+        "k_bests": jnp.sort(fitness)[-K:],
+        "k_best_average": jnp.mean(jnp.sort(fitness)[-K:])
     }
 
-def reproduce(elites, pop_size, rng, k, sigma=0.05):
+def reproduce(elites, pop_size, rng, sigma=0.05):
     rngs = jax.random.split(rng, pop_size)
     
+    @jax.jit
     def mutate(rng):
-        idx = jax.random.randint(rng, (), 0, k)
+        idx = jax.random.randint(rng, (), 0, K)
         parent = jax.tree_util.tree_map(lambda x: x[idx], elites)
         
         noise = jax.tree_util.tree_map(lambda p: sigma * jax.random.normal(rng, p.shape), parent)
         return jax.tree_util.tree_map(lambda p, n: p + n, parent, noise)
+    
     return jax.vmap(mutate)(rngs)
 
 def plot_stats(stats):
@@ -130,7 +133,7 @@ def plot_stats(stats):
     # Graphique 1: Fitness moyen et best
     ax1.plot([s["average"] for s in stats], label="Moyenne pop", alpha=0.7)
     ax1.plot([s["k_best"] for s in stats], label="Meilleur", alpha=0.7)
-    ax1.plot([s["k_best_average"] for s in stats], label=f"Moyenne top-{k}", alpha=0.7)
+    ax1.plot([s["k_best_average"] for s in stats], label=f"Moyenne top-{K}", alpha=0.7)
     ax1.set_xlabel("Génération")
     ax1.set_ylabel("Fitness")
     ax1.legend()
@@ -239,16 +242,16 @@ for step in tqdm.tqdm(range(num_generations), desc="step", total=num_generations
     std_f = jnp.std(fitness) + 1e-8  # éviter division par zéro
     fitness_norm = (fitness - mean_f) / std_f
 
-    stats.append(generate_stats(fitness_norm, k))
+    stats.append(generate_stats(fitness_norm))
     
     # Logging simple
     if step % 10 == 0 or step == num_generations - 1:
         tqdm.tqdm.write(f"Gen {step:3d}/{num_generations} | "
               f"Best: {stats[-1]['k_best']:.2f} | "
               f"Avg: {stats[-1]['average']:.2f} | "
-              f"Top-{k}: {stats[-1]['k_best_average']:.2f}")
+              f"Top-{K}: {stats[-1]['k_best_average']:.2f}")
     
-    if step % 20 == 0 or step == num_generations - 1:
+    if (step != 0 and step % 20 == 0) or step == num_generations - 1:
         tqdm.tqdm.write("Generating stats and plots...")
         best_idx = jnp.argmax(stats[-1]["fitness"])
         best_params = jax.tree_util.tree_map(lambda x: x[best_idx], pop)
@@ -257,8 +260,9 @@ for step in tqdm.tqdm(range(num_generations), desc="step", total=num_generations
         plot_stats(stats)
         print("✓ Stats and plots generated.")
     
-    elites = select(pop, fitness_norm, k)
-    pop = reproduce(elites, pop_size, rng, k)
+    pop = jax.device_put(pop)
+    elites = jax.device_put(select(pop, fitness_norm))
+    pop = reproduce(elites, pop_size, rng)
 
 print("\n✓ Entraînement terminé!")
 print("Best model:")
