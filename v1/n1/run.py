@@ -1,7 +1,5 @@
 # notebook_visualize.py  (fonctionne dans Jupyter / Colab)
 import jax, jax.numpy as jnp
-from brax.envs import create
-from brax.io import html
 from model import Level1Network
 import matplotlib.pyplot as plt
 import matplotlib
@@ -9,11 +7,17 @@ matplotlib.use('Agg')
 from IPython.display import clear_output
 import os
 import tqdm
+import brax
+from brax import envs
+from brax.io import html
 
 print("✓ Initialisation...")
 network = Level1Network()
 
-env = create('humanoid')               # ou 'ant','humanoid',...
+env = envs.get_environment(
+    env_name='ant',
+    backend='mjx'  # ← Utilise MJX sous le capot
+)             # ou 'ant','humanoid',...
 
 rng = jax.random.PRNGKey(0)
 rng, init_rng = jax.random.split(rng)
@@ -57,27 +61,30 @@ def compute_reward(state):
     return reward
 
 
+def make_rollout(env, network, steps=200):
+    def rollout_fitness(params, rng):
+        state = env.reset(rng)
+        total_reward = 0.0
+        carry = (state, total_reward)
+        
+        def loop(index, carry):
+            state, total_reward = carry
+            instruction = jnp.ones(4)
+            proprio = state.obs
+            
+            action = network.apply(params, instruction, proprio)
+            
+            state = env.step(state, action)
+            total_reward += compute_reward(state)
+            return (state, total_reward)
+        
+        carry = jax.lax.fori_loop(0, steps, loop, carry)
+        final_state, total_reward = carry
+        return total_reward
+    
+    return jax.jit(rollout_fitness)
 
-@jax.jit
-def rollout_fitness(params, rng, env, network, steps=200):
-    state = env.reset(rng)
-    total_reward = 0.0
-    carry = (state, total_reward)
-    
-    def loop(index, carry):
-        state, total_reward = carry
-        instruction = jnp.ones(4)
-        proprio = state.obs
-        
-        action = network.apply(params, instruction, proprio)
-        
-        state = env.step(state, action)
-        total_reward += compute_reward(state)
-        return (state, total_reward)
-    
-    carry = jax.lax.fori_loop(0, steps, loop, carry)
-    final_state, total_reward = carry
-    return total_reward
+rollout_fitness = make_rollout(env, network)
 
 def init_pop(base_params, pop_size, rng, sigma=0.1):
     rngs = jax.random.split(rng, pop_size)
@@ -211,6 +218,7 @@ def run_best_model(best_params, env, network, rng, steps=300, name="best_model",
     print("✓ Visualisation générée :")
 
 print("✓ Entraînement...")
+
 vmap_fitness = jax.vmap(rollout_fitness, in_axes=(0, 0, None, None))
 pop = init_pop(params, pop_size, rng)
 
@@ -218,7 +226,7 @@ num_generations = 100
 for step in tqdm.tqdm(range(num_generations), desc="step", total=num_generations):
     rng, step_rng = jax.random.split(rng)
     rngs = jax.random.split(step_rng, pop_size)
-    fitness = vmap_fitness(pop, rngs, env, network)
+    fitness = vmap_fitness(pop, rngs)
     
     # normaliser
     mean_f = jnp.mean(fitness)

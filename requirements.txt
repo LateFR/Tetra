@@ -1,6 +1,5 @@
-brax
+jax[cuda12]
+mujoco-mjx
 matplotlib
 pillow
 ipython
-tqdm
-jax[cuda12]
