@@ -224,8 +224,6 @@ def use_plots(states, torso_heights, tilt_values, rewards, name="best_model", pa
 
     with open(os.path.join(path, f"{name}.html"), "w") as f:
         f.write(html_str)
-        
-    tqdm.tqdm.write("✓ Visualisation générée :")
 
 print("✓ Entraînement...")
 
