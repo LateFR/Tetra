@@ -126,7 +126,7 @@ def reproduce(elites, pop_size, rng, sigma=0.05):
     
     return jax.vmap(mutate)(rngs)
 
-def plot_stats(stats):
+def plot_stats(stats, step):
     clear_output(wait=True)
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
     
@@ -190,6 +190,11 @@ def make_run_best_model(env, network, steps=200):
 run_best_model = make_run_best_model(env, network)
 
 def use_plots(states, torso_heights, tilt_values, rewards, name="best_model", path="./models"):
+    states = jax.device_get(states)
+    torso_heights = jax.device_get(torso_heights)
+    tilt_values = jax.device_get(tilt_values)
+    rewards = jax.device_get(rewards)
+    
     os.makedirs(path, exist_ok=True)
     # --- plots ---
     plt.figure(figsize=(12,4))
@@ -215,11 +220,7 @@ def use_plots(states, torso_heights, tilt_values, rewards, name="best_model", pa
     plt.close()
 
     # --- HTML animation ---
-    html_str = html.render(
-        sys=env.sys,
-        states=states,
-        height=480
-    )
+    html_str = html.render(sys=env.sys, states=states, height=480)
 
     with open(os.path.join(path, f"{name}.html"), "w") as f:
         f.write(html_str)
@@ -231,7 +232,8 @@ print("✓ Entraînement...")
 vmap_fitness = jax.vmap(rollout_fitness, in_axes=(0, 0))
 pop = init_pop(params, pop_size, rng)
 
-num_generations = 100
+
+num_generations = 500
 for step in tqdm.tqdm(range(num_generations), desc="step", total=num_generations):
     rng, step_rng = jax.random.split(rng)
     rngs = jax.random.split(step_rng, pop_size)
@@ -256,9 +258,15 @@ for step in tqdm.tqdm(range(num_generations), desc="step", total=num_generations
         best_idx = jnp.argmax(stats[-1]["fitness"])
         best_params = jax.tree_util.tree_map(lambda x: x[best_idx], pop)
         states, torso_heights, tilt_values, rewards = run_best_model(best_params, rng)
-        use_plots(states, torso_heights, tilt_values, rewards, name=f"model_{step}", path=f"./models/v1/{step}")
-        plot_stats(stats)
-        print("✓ Stats and plots generated.")
+        
+        torso_heights.block_until_ready()
+        tilt_values.block_until_ready()
+        rewards.block_until_ready()
+        
+        use_plots(states, torso_heights, tilt_values, rewards, f"model_{step}", f"./models/v1/{step}")
+
+        plot_stats(stats, step)
+        tqdm.tqdm.write("✓ Stats and plots generated.")
     
     pop = jax.device_put(pop)
     elites = jax.device_put(select(pop, fitness_norm))
@@ -270,4 +278,5 @@ print("Best model:")
 best_idx = jnp.argmax(stats[-1]["fitness"])
 best_params = jax.tree_util.tree_map(lambda x: x[best_idx], pop)
 
-run_best_model(best_params, env)
+rng, split_rng = jax.random.split(rng)
+run_best_model(best_params, split_rng)
