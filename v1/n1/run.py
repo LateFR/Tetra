@@ -14,7 +14,7 @@ print("✓ Initialisation...")
 network = Level1Network()
 
 env = envs.get_environment(
-    env_name='humanoid',
+    env_name='ant',
     backend='mjx'  # ← Utilise MJX sous le capot
 )             # ou 'ant','humanoid',...
 
@@ -36,27 +36,37 @@ K = 8
 
 def compute_reward(state):
     ps = state.pipeline_state
-
-    # Torse = body 0
-    torso_pos = ps.x.pos[0]     # (x, y, z)
-    torso_rot = ps.x.rot[0]     # (w, x, y, z)
-
+    torso_pos = ps.x.pos[0]
+    torso_rot = ps.x.rot[0]
     torso_height = torso_pos[2]
-
-    # pénalité d'inclinaison
+    
+    # Pénalité d'inclinaison
     tilt_penalty = jnp.sum(torso_rot[1:3] ** 2)
-
+    
+    # Vitesses
     lin_vel = jnp.linalg.norm(ps.xd.vel[0])
     ang_vel = jnp.linalg.norm(ps.xd.ang[0])
-
-    height_reward = jnp.clip(torso_height - 1.0, 0.0, 1.0)
-    balance_reward = jnp.exp(-5.0 * tilt_penalty)
-
-    stability_penalty = 0.05 * lin_vel + 0.05 * ang_vel
-
-    reward = height_reward + balance_reward - stability_penalty
-    reward = jnp.where(torso_height < 0.8, -5.0, reward)
-
+    
+    # === REWARD PROGRESSIF ===
+    
+    # 1. Reward de hauteur (plus linéaire)
+    height_reward = jnp.clip(torso_height, 0.0, 1.5)  # 0 → 1.5 m
+    
+    # 2. Bonus d'équilibre (exponentiel pour inciter la stabilité)
+    balance_reward = 2.0 * jnp.exp(-5.0 * tilt_penalty)
+    
+    # 3. Pénalité de mouvement (mais pas trop forte)
+    stability_penalty = 0.01 * (lin_vel + ang_vel)
+    
+    # 4. Bonus de survie (récompense juste rester debout)
+    survival_bonus = 0.1  # petit bonus à chaque step
+    
+    # === TOTAL ===
+    reward = height_reward + balance_reward + survival_bonus - stability_penalty
+    
+    # Si vraiment au sol (< 0.5m), pénalité mais pas catastrophique
+    reward = jnp.where(torso_height < 0.5, -1.0, reward)  # -1 au lieu de -5
+    
     return reward
 
 
