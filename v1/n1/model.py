@@ -17,7 +17,7 @@ class Level1Network(nn.Module):
     hidden_dim: int = 128        # neurones cachés (petit réseau)
     output_dim: int = 17        
     @nn.compact
-    def __call__(self, instruction_N2, proprio, output_dim=1):
+    def __call__(self, instruction_N2, proprio):
         """
         Forward pass du réseau
         
