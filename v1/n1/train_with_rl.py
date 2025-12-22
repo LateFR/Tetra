@@ -1,3 +1,4 @@
+import time
 import jax
 import jax.numpy as jnp
 from model import Level1Network
@@ -98,6 +99,8 @@ def collect_trajectories(env, network, params, rng, num_envs=32, num_steps=200):
     
     Utilise jax.lax.scan pour paralléliser AUSSI la boucle temporelle !
     """
+    start_time = time.time()
+    tqdm.tqdm.write(f"Collecting trajectories...")
     rngs = jax.random.split(rng, num_envs)
     states = jax.vmap(env.reset)(rngs)
     
@@ -181,6 +184,8 @@ def collect_trajectories(env, network, params, rng, num_envs=32, num_steps=200):
             'value': transitions['value'][i]
         })
     
+    tqdm.tqdm.write(f"Trajectories collected in {time.time() - start_time:.2f}s")
+    
     return trajectories
 
 # ============================================================================
@@ -216,6 +221,8 @@ def train_ppo(
     network,
     params,
     num_iterations=1000,
+    show_stats_every=10,
+    save_every=100,
     num_envs=32,
     num_steps=200,
     num_epochs=4,
@@ -284,7 +291,7 @@ def train_ppo(
             return params, opt_state, info
         
         epoch_losses = []
-        for epoch in range(num_epochs):
+        for epoch in tqdm.tqdm(range(num_epochs), desc="Optim", total=num_epochs):
             # Shuffle des données
             rng, perm_rng = jax.random.split(rng)
             perm = jax.random.permutation(perm_rng, dataset_size)
@@ -334,17 +341,17 @@ def train_ppo(
             'total_loss': float(avg_info['total_loss'])
         })
         
-        if iteration % 10 == 0:
+        if iteration % show_stats_every == 0:
             tqdm.tqdm.write(
                 f"Iter {iteration:4d} | "
                 f"Reward: {mean_reward:6.2f} (min: {min_reward:6.2f}, max: {max_reward:6.2f}) | "
-                f"PL: {avg_info['policy_loss']:.4f} | "
-                f"VL: {avg_info['value_loss']:.4f} | "
-                f"Ent: {avg_info['entropy']:.4f}"
+                f"Policy loss: {avg_info['policy_loss']:.4f} | "
+                f"Value loss: {avg_info['value_loss']:.4f} | "
+                f"Entropy: {avg_info['entropy']:.4f}"
             )
         
         # Sauvegarde périodique
-        if iteration % 100 == 0 and iteration > 0:
+        if iteration % save_every == 0 and iteration > 0:
             os.makedirs("./models/ppo", exist_ok=True)
             # Tu peux sauvegarder params ici si besoin
             plot_training_stats(stats, iteration)

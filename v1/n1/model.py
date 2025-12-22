@@ -15,6 +15,7 @@ class Level1Network(nn.Module):
     
     instruction_dim: int = 4   # taille du vecteur d'instruction
     hidden_dim: int = 128        # neurones cachés (petit réseau)
+    critic_hidden_dim: int = hidden_dim # critic >= policy
     output_dim: int = 17        
     @nn.compact
     def __call__(self, instruction_N2, proprio):
@@ -55,9 +56,14 @@ class Level1Network(nn.Module):
         
         log_std = self.param('log_std', nn.initializers.zeros, (self.output_dim,))
         
-        value = nn.Dense(1)(attention_input)
-        value = nn.tanh(value)
-        value = nn.Dense(1)(value)
+        critic_input = jnp.concatenate([instruction_N2, proprio])
+        value = nn.Dense(self.critic_hidden_dim, name='critic_dense1')(critic_input)
+        value = nn.relu(value)
+        
+        value = nn.Dense(self.critic_hidden_dim, name='critic_dense2')(value)
+        value = nn.relu(value)
+        
+        value = nn.Dense(1, name='critic_output')(value)
         value = jnp.squeeze(value, axis=-1)
 
         return (mu, log_std, value)
