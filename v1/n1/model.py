@@ -51,7 +51,13 @@ class Level1Network(nn.Module):
         
         # === FUSION ===
         # action finale = mélange pondéré des deux flux
-        final_action = attention * commanded + (1 - attention) * reflexive
+        mu = attention * commanded + (1 - attention) * reflexive
         
-        # Retourne un scalaire (pas un array de taille [1])
-        return final_action
+        log_std = self.param('log_std', nn.initializers.zeros, (self.output_dim,))
+        
+        value = nn.Dense(1)(attention_input)
+        value = nn.tanh(value)
+        value = nn.Dense(1)(value)
+        value = jnp.squeeze(value, axis=-1)
+
+        return (mu, log_std, value)
