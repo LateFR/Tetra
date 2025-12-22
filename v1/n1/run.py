@@ -43,10 +43,10 @@ dummy_proprio = jnp.zeros(env.observation_size)
 params = network.init(init_rng, dummy_instruction, dummy_proprio)
 stats = []
 
-pop_size = 128
-K = 16
-SIGMA_INIT = 0.3
-SIGMA_REPROD = 0.1
+pop_size = 4096
+K = 512
+SIGMA_INIT = 0.5
+SIGMA_REPROD = 0.2
 
 def compute_reward(state):
     ps = state.pipeline_state
@@ -84,7 +84,7 @@ def compute_reward(state):
     return reward
 
 
-def make_rollout(env, network, steps=200):
+def make_rollout(env, network, steps=300):
     def rollout_fitness(params, rng):
         state = env.reset(rng)
         total_reward = 0.0
@@ -176,7 +176,7 @@ def plot_stats(stats, step):
     plt.savefig(f"./stats/stats-{step}.png")
     plt.close()
 
-def make_run_best_model(env, network, steps=200):
+def make_run_best_model(env, network, steps=300):
     def run_best_model(best_params, rng):
         state = env.reset(rng)
 
