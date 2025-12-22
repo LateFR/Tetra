@@ -10,11 +10,23 @@ import brax
 from brax import envs
 from brax.io import html
 
+if __name__ == "__main__":
+    if os.path.exists("./stats"):
+        if input("Stats folder already exists. Overwrite? (y/n): ") == "y":
+            os.system("rm -rf ./stats")
+        else:
+            exit()
+    
+    if os.path.exists("./models"):
+        if input("Models folder already exists. Overwrite? (y/n): ") == "y":
+            os.system("rm -rf ./models")
+        else:
+            exit()
 print("✓ Initialisation...")
 network = Level1Network()
 
 env = envs.get_environment(
-    env_name='ant',
+    env_name='humanoid',
     backend='mjx'  # ← Utilise MJX sous le capot
 )             # ou 'ant','humanoid',...
 
