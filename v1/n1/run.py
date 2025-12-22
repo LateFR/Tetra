@@ -43,8 +43,9 @@ dummy_proprio = jnp.zeros(env.observation_size)
 params = network.init(init_rng, dummy_instruction, dummy_proprio)
 stats = []
 
-pop_size = 4096
-K = 512
+pop_size = 1782
+K = int(pop_size//12.5)  # K = 12.5% of the population
+print(f"Population size: {pop_size} | K: {K}")
 SIGMA_INIT = 0.5
 SIGMA_REPROD = 0.2
 
@@ -84,7 +85,7 @@ def compute_reward(state):
     return reward
 
 
-def make_rollout(env, network, steps=300):
+def make_rollout(env, network, steps=200):
     def rollout_fitness(params, rng):
         state = env.reset(rng)
         total_reward = 0.0
@@ -176,7 +177,7 @@ def plot_stats(stats, step):
     plt.savefig(f"./stats/stats-{step}.png")
     plt.close()
 
-def make_run_best_model(env, network, steps=300):
+def make_run_best_model(env, network, steps=200):
     def run_best_model(best_params, rng):
         state = env.reset(rng)
 
@@ -255,7 +256,7 @@ vmap_fitness = jax.vmap(rollout_fitness, in_axes=(0, 0))
 pop = init_pop(params, pop_size, rng, sigma=SIGMA_INIT)
 
 
-num_generations = 500
+num_generations = 8000
 for step in tqdm.tqdm(range(num_generations), desc="step", total=num_generations):
     rng, step_rng = jax.random.split(rng)
     rngs = jax.random.split(step_rng, pop_size)
@@ -275,7 +276,7 @@ for step in tqdm.tqdm(range(num_generations), desc="step", total=num_generations
               f"Avg: {stats[-1]['average']:.2f} | "
               f"Top-{K}: {stats[-1]['k_best_average']:.2f}")
     
-    if (step != 0 and step % 20 == 0) or step == num_generations - 1:
+    if (step != 0 and step % 500 == 0) or step == num_generations - 1:
         tqdm.tqdm.write("Generating stats and plots...")
         best_idx = jnp.argmax(stats[-1]["fitness"])
         best_params = jax.tree_util.tree_map(lambda x: x[best_idx], pop)
