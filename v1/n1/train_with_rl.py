@@ -27,25 +27,39 @@ os.makedirs(MODELS_DIR, exist_ok=True)
 # FONCTIONS PPO
 # ============================================================================
 
+@jax.jit
 def compute_gae(rewards, values, next_values, dones, gamma=0.99, gae_lambda=0.95):
     """
-    Generalized Advantage Estimation (GAE)
-
-    GAE permet d'estimer l'avantage de prendre une action dans un état
-    en équilibrant biais et variance.
+    Generalized Advantage Estimation (GAE) - Version JIT-able
+    
+    Utilise scan au lieu d'une boucle Python pour être compilable par JAX
     """
-    advantages = []
-    gae = 0.0
-
-    # On parcourt à l'envers (du futur vers le présent)
-    for t in reversed(range(len(rewards))):
+    def gae_step(gae_and_advantage, t):
+        """Step fonction pour scan - parcourt à l'envers"""
+        gae = gae_and_advantage
+        
+        # Calcul du TD error (delta)
         delta = rewards[t] + gamma * next_values[t] * (1 - dones[t]) - values[t]
+        
+        # Mise à jour GAE
         gae = delta + gamma * gae_lambda * (1 - dones[t]) * gae
-        advantages.insert(0, gae)
-
-    advantages = jnp.array(advantages)
-    returns = advantages + jnp.array(values)
-
+        
+        return gae, gae  # (carry, output)
+    
+    # Scan à l'envers (reversed)
+    num_steps = len(rewards)
+    _, advantages = jax.lax.scan(
+        gae_step,
+        0.0,  # Initial GAE
+        jnp.arange(num_steps - 1, -1, -1)  # Indices à l'envers
+    )
+    
+    # Remettre dans le bon ordre (advantages est actuellement inversé)
+    advantages = advantages[::-1]
+    
+    # Calcul des returns
+    returns = advantages + values
+    
     return advantages, returns
 
 def ppo_loss(params, network, batch, clip_epsilon=0.2, vf_coef=0.5, ent_coef=0.005):
