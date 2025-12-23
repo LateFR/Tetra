@@ -126,7 +126,6 @@ def collect_trajectories(env, network, params, rng, num_envs=32, num_steps=200):
     Utilise jax.lax.scan pour paralléliser AUSSI la boucle temporelle !
     """
     start_time = time.time()
-    tqdm.tqdm.write(f"Collecting trajectories...")
     rngs = jax.random.split(rng, num_envs)
     states = jax.vmap(env.reset)(rngs)
 
@@ -382,7 +381,6 @@ def train_ppo(
             env, network, params, collect_rng, num_envs, num_steps
         )
         start_time = time.time()
-        tqdm.tqdm.write(f"Calculating advantages, GAE, and rewards...")
         # 2. CALCUL DES AVANTAGES (GAE)
         obs = jnp.concatenate([t['obs'] for t in trajectories])
         actions = jnp.concatenate([t['action'] for t in trajectories])
@@ -408,7 +406,6 @@ def train_ppo(
 
         tqdm.tqdm.write(f"Calculated advantages, GAE, and rewards in {time.time() - start_time:.2f}s")
         start_time = time.time()
-        tqdm.tqdm.write(f"Optimizing...")
         # 3. OPTIMISATION (plusieurs epochs sur le même batch de données)
         dataset_size = obs.shape[0]
 
