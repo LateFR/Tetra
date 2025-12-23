@@ -131,7 +131,11 @@ def collect_trajectories(env, network, params, rng, num_envs=32, num_steps=200):
     states = jax.vmap(env.reset)(rngs)
 
     instruction = jnp.ones(4)
-
+    @jax.jit
+    def batch_compute_reward(states):
+        """Vectorise le calcul de reward"""
+        return jax.vmap(compute_reward)(states)
+    
     # JIT uniquement la fonction scan_step (pas collect_trajectories entière)
     @jax.jit
     def rollout_scan(params, states, rngs_steps):
@@ -165,7 +169,7 @@ def collect_trajectories(env, network, params, rng, num_envs=32, num_steps=200):
             next_states = jax.vmap(lambda s, a: env.step(s, a))(states, actions)
 
             # Rewards personnalisés
-            rewards = jax.vmap(compute_reward)(next_states)
+            rewards = batch_compute_reward(next_states)
 
             # Ce qu'on garde pour cette step
             transition = {
