@@ -48,7 +48,7 @@ def compute_gae(rewards, values, next_values, dones, gamma=0.99, gae_lambda=0.95
 
     return advantages, returns
 
-def ppo_loss(params, network, batch, clip_epsilon=0.2, vf_coef=0.5, ent_coef=0.01):
+def ppo_loss(params, network, batch, clip_epsilon=0.2, vf_coef=0.5, ent_coef=0.005):
     """
     Loss function de PPO
 
@@ -81,6 +81,9 @@ def ppo_loss(params, network, batch, clip_epsilon=0.2, vf_coef=0.5, ent_coef=0.0
     surr2 = jnp.clip(ratio, 1 - clip_epsilon, 1 + clip_epsilon) * advantages
     policy_loss = -jnp.mean(jnp.minimum(surr1, surr2))
 
+    # Normalisation des returns pour stabiliser le critic
+    returns = (returns - returns.mean()) / (returns.std() + 1e-8)
+    
     # Loss value (Mean Squared Error entre valeur prédite et retour réel)
     value_loss = jnp.mean((returns - values) ** 2)
 
@@ -380,6 +383,7 @@ def train_ppo(
 
         # GAE
         advantages, returns = compute_gae(rewards, values, next_values, dones)
+        advantages = (advantages - jnp.mean(advantages)) / (jnp.std(advantages) + 1e-8)
 
         # Normalisation des avantages (stabilise l'entraînement)
         advantages = (advantages - jnp.mean(advantages)) / (jnp.std(advantages) + 1e-8)

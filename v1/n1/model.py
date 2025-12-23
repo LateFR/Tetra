@@ -48,7 +48,7 @@ class Level1Network(nn.Module):
         attention = nn.Dense(features=4, name='att_dense1')(attention_input)
         attention = nn.tanh(attention)
         attention = nn.Dense(features=self.output_dim, name='att_output')(attention)
-        attention = nn.sigmoid(attention)  # poids entre 0 et 1
+        attention = nn.tanh(attention) * 0.5 + 0.5 # normalisation between 0 and 1
         
         # === FUSION ===
         # action finale = mélange pondéré des deux flux
@@ -56,7 +56,7 @@ class Level1Network(nn.Module):
         
         log_std = self.param('log_std', nn.initializers.zeros, (self.output_dim,))
         
-        critic_input = jnp.concatenate([instruction_N2, proprio])
+        critic_input = jnp.concatenate([instruction_N2, proprio, mu])
         value = nn.Dense(self.critic_hidden_dim, name='critic_dense1')(critic_input)
         value = nn.relu(value)
         
