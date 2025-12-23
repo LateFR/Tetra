@@ -29,37 +29,24 @@ os.makedirs(MODELS_DIR, exist_ok=True)
 
 @jax.jit
 def compute_gae(rewards, values, next_values, dones, gamma=0.99, gae_lambda=0.95):
-    """
-    Generalized Advantage Estimation (GAE) - Version JIT-able
+    # rewards shape: (num_steps, num_envs)
     
-    Utilise scan au lieu d'une boucle Python pour être compilable par JAX
-    """
-    def gae_step(gae_and_advantage, t):
-        """Step fonction pour scan - parcourt à l'envers"""
-        gae = gae_and_advantage
-        
-        # Calcul du TD error (delta)
-        delta = rewards[t] + gamma * next_values[t] * (1 - dones[t]) - values[t]
-        
-        # Mise à jour GAE
-        gae = delta + gamma * gae_lambda * (1 - dones[t]) * gae
-        
-        return gae, gae  # (carry, output)
+    delta = rewards + gamma * next_values * (1 - dones) - values
     
-    # Scan à l'envers (reversed)
-    num_steps = len(rewards)
-    _, advantages = jax.lax.scan(
-        gae_step,
-        0.0,  # Initial GAE
-        jnp.arange(num_steps - 1, -1, -1)  # Indices à l'envers
+    def step(carry, inputs):
+        gae = carry
+        r, v, nv, d = inputs
+        delta = r + gamma * nv * (1 - d) - v
+        gae = delta + gamma * gae_lambda * (1 - d) * gae
+        return gae, (gae, gae + v) # advantage, return
+
+    # Scan sur l'axe temporel (axis 0)
+    _, (advantages, returns) = jax.lax.scan(
+        step,
+        jnp.zeros(rewards.shape[1]), # Initial GAE pour chaque env (vecteur de 0)
+        (delta, (1 - dones)), # Inputs : (rewards, values, next_values, dones)
+        reverse=True
     )
-    
-    # Remettre dans le bon ordre (advantages est actuellement inversé)
-    advantages = advantages[::-1]
-    
-    # Calcul des returns
-    returns = advantages + values
-    
     return advantages, returns
 
 def ppo_loss(params, network, batch, clip_epsilon=0.2, vf_coef=0.5, ent_coef=0.005):
@@ -197,21 +184,8 @@ def collect_trajectories(env, network, params, rng, num_envs=32, num_steps=200):
     rngs_steps = jax.random.split(scan_rng, num_steps)
 
     # Appelle la version JIT
-    transitions = rollout_scan(params, states, rngs_steps)
+    trajectories = rollout_scan(params, states, rngs_steps)
 
-    # transitions est maintenant un dictionnaire de arrays de shape (num_steps, num_envs, ...)
-    # On les reformate en liste de dicts pour compatibilité avec le reste du code
-    trajectories = []
-    for i in range(num_steps):
-        trajectories.append({
-            'obs': transitions['obs'][i],
-            'action': transitions['action'][i],
-            'reward': transitions['reward'][i],
-            'next_obs': transitions['next_obs'][i],
-            'done': transitions['done'][i],
-            'log_prob': transitions['log_prob'][i],
-            'value': transitions['value'][i]
-        })
 
     tqdm.tqdm.write(f"Trajectories collected in {time.time() - start_time:.2f}s")
 
@@ -382,28 +356,37 @@ def train_ppo(
         )
         start_time = time.time()
         # 2. CALCUL DES AVANTAGES (GAE)
-        obs = jnp.concatenate([t['obs'] for t in trajectories])
-        actions = jnp.concatenate([t['action'] for t in trajectories])
-        rewards = jnp.concatenate([t['reward'] for t in trajectories])
-        values = jnp.concatenate([t['value'] for t in trajectories])
-        log_probs = jnp.concatenate([t['log_prob'] for t in trajectories])
-        dones = jnp.concatenate([t['done'] for t in trajectories])
-        next_obs = jnp.concatenate([t['next_obs'] for t in trajectories])
+        # On aplatit les dimensions Temps et Batch
+        def flatten(x):
+            return x.reshape((-1,) + x.shape[2:])
 
-        # Valeurs des next states
+        rewards = trajectories['reward']
+        values = trajectories['value']
+        dones = trajectories['done']
+        
         instruction = jnp.ones(4)
         def get_value(o):
-            _, _, value = network.apply(params, instruction, o)
-            return value
-        next_values = jax.vmap(get_value)(next_obs)
-
+            _, _, v = network.apply(params, instruction, o)
+            return v
+        
+        last_value = jax.vmap(get_value)(trajectories['next_obs'][-1]) 
+        next_values = jnp.concatenate([values[1:], last_value[None, :]], axis=0)
+        
+        advantages, returns = compute_gae(rewards, values, next_values, dones)
+        
         # GAE
         advantages, returns = compute_gae(rewards, values, next_values, dones)
-        advantages = (advantages - jnp.mean(advantages)) / (jnp.std(advantages) + 1e-8)
+        advantages = (advantages - jnp.mean(advantages)) / (jnp.std(advantages) + 1e-8) # norm of advantages
+        
+        def flatten(x):
+            return x.reshape((-1,) + x.shape[2:]) if x.ndim > 2 else x.reshape(-1)
 
-        # Normalisation des avantages (stabilise l'entraînement)
-        advantages = (advantages - jnp.mean(advantages)) / (jnp.std(advantages) + 1e-8)
-
+        obs = flatten(trajectories['obs'])
+        actions = flatten(trajectories['action'])
+        log_probs = flatten(trajectories['log_prob'])
+        returns = flatten(returns)
+        advantages = flatten(advantages)
+        
         tqdm.tqdm.write(f"Calculated advantages, GAE, and rewards in {time.time() - start_time:.2f}s")
         start_time = time.time()
         # 3. OPTIMISATION (plusieurs epochs sur le même batch de données)
@@ -583,10 +566,10 @@ if __name__ == "__main__":
         env=env,
         network=network,
         params=params,
-        num_iterations=1000,      # Nombre d'itérations PPO
-        show_stats_every=50,     # Afficher les stats tous les X itérations
-        save_every=100,          # Sauvegarder modèle et stats tous les X itérations
-        num_envs=64,             # Nombre d'environnements parallèles
+        num_iterations=300,      # Nombre d'itérations PPO
+        show_stats_every=20,     # Afficher les stats tous les X itérations
+        save_every=50,          # Sauvegarder modèle et stats tous les X itérations
+        num_envs=4096,             # Nombre d'environnements parallèles
         num_steps=num_steps,           # Steps par environnement
         num_epochs=4,            # Epochs d'optimisation par iteration
         batch_size=512,          # Taille des mini-batches
