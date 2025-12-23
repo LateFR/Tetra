@@ -13,8 +13,7 @@ from brax import envs
 from brax.io import html
 import optax
 from typing import NamedTuple
-import sys # Importation de sys pour pouvoir utiliser sys.stdout
-
+from functools import partial
 # ============================================================================
 # CONFIGURATION GLOBALE
 # ============================================================================
@@ -29,24 +28,32 @@ os.makedirs(MODELS_DIR, exist_ok=True)
 
 @jax.jit
 def compute_gae(rewards, values, next_values, dones, gamma=0.99, gae_lambda=0.95):
-    # rewards shape: (num_steps, num_envs)
-    
+    # 1. On calcule le TD error (delta) pour TOUT le tableau d'un coup (Vectorisation JAX)
+    # C'est beaucoup plus efficace que de le faire dans la boucle scan
     delta = rewards + gamma * next_values * (1 - dones) - values
     
-    def step(carry, inputs):
-        gae = carry
-        r, v, nv, d = inputs
-        delta = r + gamma * nv * (1 - d) - v
-        gae = delta + gamma * gae_lambda * (1 - d) * gae
-        return gae, (gae, gae + v) # advantage, return
+    # 2. La fonction de step pour le scan
+    # Elle ne reçoit que delta et le masque (1-dones) pour l'instant t
+    def step(gae, inputs):
+        d_t, mask_t = inputs  # On ne reçoit que 2 valeurs ici !
+        
+        # Formule GAE : gae = delta + gamma * lambda * mask * gae_precedent
+        gae = d_t + gamma * gae_lambda * mask_t * gae
+        
+        return gae, gae # (carry, output)
 
-    # Scan sur l'axe temporel (axis 0)
-    _, (advantages, returns) = jax.lax.scan(
+    # 3. Le scan
+    # On passe (delta, 1-dones) comme inputs à scanner
+    _, advantages = jax.lax.scan(
         step,
-        jnp.zeros(rewards.shape[1]), # Initial GAE pour chaque env (vecteur de 0)
-        (delta, (1 - dones)), # Inputs : (rewards, values, next_values, dones)
-        reverse=True
+        jnp.zeros(rewards.shape[1]), # Carry initial (GAE=0 pour le futur lointain)
+        (delta, (1 - dones)),        # Les inputs qu'on itère (axis 0 par défaut)
+        reverse=True                 # On remonte le temps (de la fin vers le début)
     )
+    
+    # 4. Calcul final des returns
+    returns = advantages + values
+    
     return advantages, returns
 
 def ppo_loss(params, network, batch, clip_epsilon=0.2, vf_coef=0.5, ent_coef=0.005):
@@ -313,6 +320,48 @@ def plot_training_stats_img(stats, iteration):
 # ============================================================================
 # ENTRAÎNEMENT PPO
 # ============================================================================
+@partial(jax.jit, static_argnames=['batch_size', 'optimizer', 'network'])
+def train_epoch_scan(params, opt_state, batch_data, batch_size, rng, optimizer, network):
+    """Effectue UNE epoch complète (shuffle + updates) sur GPU"""
+    obs, actions, log_probs, returns, advantages = batch_data
+    dataset_size = obs.shape[0]
+    steps_per_epoch = dataset_size // batch_size
+    
+    # 1. Shuffle des données
+    perm = jax.random.permutation(rng, dataset_size)
+    
+    # Fonction pour mélanger et reshaper en (Nombre_Batches, Batch_Size, ...)
+    def prepare_batch(x):
+        shuffled = x[perm]
+        # On coupe les données qui dépassent (si dataset_size n'est pas multiple de batch_size)
+        trunc_len = steps_per_epoch * batch_size
+        shuffled = shuffled[:trunc_len]
+        return shuffled.reshape((steps_per_epoch, batch_size) + x.shape[1:])
+
+    obs_b = prepare_batch(obs)
+    actions_b = prepare_batch(actions)
+    log_probs_b = prepare_batch(log_probs)
+    returns_b = prepare_batch(returns)
+    advantages_b = prepare_batch(advantages)
+
+    # 2. La boucle d'update (sur GPU via Scan)
+    def update_step(carry, batch):
+        params, opt_state = carry
+        # batch est un tuple (o, a, lp, r, adv) pour UN mini-batch
+        loss_fn = lambda p: ppo_loss(p, network, batch)
+        (loss_val, info), grads = jax.value_and_grad(loss_fn, has_aux=True)(params)
+        updates, opt_state = optimizer.update(grads, opt_state)
+        params = optax.apply_updates(params, updates)
+        return (params, opt_state), info
+
+    # Lancement du scan
+    (new_params, new_opt_state), infos = jax.lax.scan(
+        update_step, 
+        (params, opt_state), 
+        (obs_b, actions_b, log_probs_b, returns_b, advantages_b)
+    )
+    
+    return new_params, new_opt_state, infos
 
 def train_ppo(
     env,
@@ -390,49 +439,26 @@ def train_ppo(
         tqdm.tqdm.write(f"Calculated advantages, GAE, and rewards in {time.time() - start_time:.2f}s")
         start_time = time.time()
         # 3. OPTIMISATION (plusieurs epochs sur le même batch de données)
-        dataset_size = obs.shape[0]
-
-        # JIT la fonction d'update pour accélérer !
-        @jax.jit
-        def update_step(params, opt_state, batch):
-            """Une step d'optimisation - JIT-able !"""
-            loss_fn = lambda p: ppo_loss(p, network, batch)
-            (loss_val, info), grads = jax.value_and_grad(loss_fn, has_aux=True)(params)
-            updates, opt_state = optimizer.update(grads, opt_state)
-            params = optax.apply_updates(params, updates)
-            return params, opt_state, info
+        
+        batch_data = (obs, actions, log_probs, returns, advantages)
 
         epoch_losses = []
-        for epoch in tqdm.trange(num_epochs, desc=f"Optim (Iter {iteration})", leave=False):
-            # Shuffle des données
-            rng, perm_rng = jax.random.split(rng)
-            perm = jax.random.permutation(perm_rng, dataset_size)
+        
+        # Boucle simple sur les epochs (4 itérations, c'est rien pour Python)
+        for epoch in range(num_epochs):
+            rng, epoch_rng = jax.random.split(rng)
+            
+            # APPEL DE LA FONCTION SCAN : Tout se passe sur le GPU ici
+            params, opt_state, info = train_epoch_scan(
+                params, opt_state, batch_data, batch_size, epoch_rng, optimizer, network
+            )
+            
+            # On stocke la moyenne des losses de cette epoch
+            avg_loss = {k: jnp.mean(v) for k, v in info.items()}
+            epoch_losses.append(avg_loss)
 
-            obs_shuffled = obs[perm]
-            actions_shuffled = actions[perm]
-            log_probs_shuffled = log_probs[perm]
-            returns_shuffled = returns[perm]
-            advantages_shuffled = advantages[perm]
-
-            # Mini-batches
-            num_batches = dataset_size // batch_size
-
-            for i in range(num_batches):
-                start = i * batch_size
-                end = start + batch_size
-
-                batch = (
-                    obs_shuffled[start:end],
-                    actions_shuffled[start:end],
-                    log_probs_shuffled[start:end],
-                    returns_shuffled[start:end],
-                    advantages_shuffled[start:end]
-                )
-
-                # Appelle la version JIT
-                params, opt_state, info = update_step(params, opt_state, batch)
-                epoch_losses.append(info)
         tqdm.tqdm.write(f"Optimized in {time.time() - start_time:.2f}s")
+        
         # 4. LOGGING & SAUVEGARDE
         mean_reward = jnp.mean(rewards)
         max_reward = jnp.max(rewards)
@@ -572,7 +598,7 @@ if __name__ == "__main__":
         num_envs=4096,             # Nombre d'environnements parallèles
         num_steps=num_steps,           # Steps par environnement
         num_epochs=4,            # Epochs d'optimisation par iteration
-        batch_size=512,          # Taille des mini-batches
+        batch_size=32768,          # Taille des mini-batches
         learning_rate=3e-4       # Learning rate initial
     )
 
