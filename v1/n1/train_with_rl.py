@@ -341,14 +341,14 @@ def train_ppo(
     env,
     network,
     params,
-    num_iterations=1000,
+    num_iterations=1500,
     show_stats_every=10,
     save_every=100,
-    num_envs=32,
+    num_envs=64,
     num_steps=200,
     num_epochs=4,
     batch_size=512,
-    learning_rate=3e-4
+    learning_rate=1e-4
 ):
     """Boucle d'entraînement PPO"""
 

@@ -54,9 +54,9 @@ class Level1Network(nn.Module):
         # action finale = mélange pondéré des deux flux
         mu = attention * commanded + (1 - attention) * reflexive
         
-        log_std = self.param('log_std', nn.initializers.zeros, (self.output_dim,))
+        log_std = self.param('log_std', nn.initializers.constant(-0.5), (self.output_dim,))
         
-        critic_input = jnp.concatenate([instruction_N2, proprio, mu])
+        critic_input = jnp.concatenate([instruction_N2, proprio])
         value = nn.Dense(self.critic_hidden_dim, name='critic_dense1')(critic_input)
         value = nn.relu(value)
         
